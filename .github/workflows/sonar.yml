@@ -1,0 +1,82 @@
+name: SonarQube Analysis
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  sonar-analysis:
+
+    name: SonarQube Cloud Analysis
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Build application
+        run: npm run build
+
+      - name: Verify coverage file
+        shell: bash
+        run: |
+          if [ ! -f coverage/lcov.info ]; then
+            echo "ERROR: coverage/lcov.info was not generated."
+            exit 1
+          fi
+
+          echo "Coverage file generated successfully."
+
+      - name: Run SonarQube Cloud analysis
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+
+      - name: SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Execution summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# SonarQube POC"
+            echo ""
+            echo "| Component | Result |"
+            echo "|---|---|"
+            echo "| Repository | \`${{ github.repository }}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Tests | Executed |"
+            echo "| Coverage | Generated |"
+            echo "| Build | Executed |"
+            echo "| SonarQube | Executed |"
+          } >> "$GITHUB_STEP_SUMMARY"
