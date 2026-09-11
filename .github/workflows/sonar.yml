@@ -4,11 +4,20 @@ on:
   push:
     branches:
       - main
-      
+      - release
+      - develop
 
   pull_request:
     branches:
       - main
+      - release
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+  workflow_dispatch:
 
 jobs:
   sonar-analysis:
@@ -19,29 +28,108 @@ jobs:
 
     steps:
 
+      # ------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+
+      # ------------------------------------------------------------
+      # 2. Determinar rama y ambiente
+      #
+      # PUSH:
+      #   develop -> DEV
+      #   release -> QAS
+      #   main    -> PRD
+      #
+      # PR:
+      #   se toma como referencia la rama destino (base_ref)
+      # ------------------------------------------------------------
+      - name: Determine branch and environment
+        id: environment
+        shell: bash
+        run: |
+          echo "----------------------------------------"
+          echo "Determining branch and environment"
+          echo "----------------------------------------"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH_NAME="${{ github.base_ref }}"
+            SOURCE_BRANCH="${{ github.head_ref }}"
+          else
+            BRANCH_NAME="${{ github.ref_name }}"
+            SOURCE_BRANCH="${{ github.ref_name }}"
+          fi
+
+          if [ "$BRANCH_NAME" = "main" ]; then
+            ENVIRONMENT="prd"
+
+          elif [ "$BRANCH_NAME" = "release" ]; then
+            ENVIRONMENT="qas"
+
+          elif [ "$BRANCH_NAME" = "develop" ]; then
+            ENVIRONMENT="dev"
+
+          else
+            echo "ERROR: Unsupported branch: $BRANCH_NAME"
+            exit 1
+          fi
+
+          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=$SOURCE_BRANCH" >> "$GITHUB_ENV"
+          echo "ENVIRONMENT=$ENVIRONMENT" >> "$GITHUB_ENV"
+
+          echo "Event:        ${{ github.event_name }}"
+          echo "Source:       $SOURCE_BRANCH"
+          echo "Target:       $BRANCH_NAME"
+          echo "Environment:  $ENVIRONMENT"
+          echo "----------------------------------------"
+
+
+      # ------------------------------------------------------------
+      # 3. Setup Node.js
+      # ------------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
 
+
+      # ------------------------------------------------------------
+      # 4. Instalar dependencias
+      # ------------------------------------------------------------
       - name: Install dependencies
         run: npm ci
 
+
+      # ------------------------------------------------------------
+      # 5. Lint
+      # ------------------------------------------------------------
       - name: Run lint
         run: npm run lint
 
+
+      # ------------------------------------------------------------
+      # 6. Pruebas + cobertura
+      # ------------------------------------------------------------
       - name: Run tests with coverage
         run: npm run test:coverage
 
+
+      # ------------------------------------------------------------
+      # 7. Build
+      # ------------------------------------------------------------
       - name: Build application
         run: npm run build
 
+
+      # ------------------------------------------------------------
+      # 8. Validar reporte LCOV
+      # ------------------------------------------------------------
       - name: Verify coverage file
         shell: bash
         run: |
@@ -52,16 +140,23 @@ jobs:
 
           echo "Coverage file generated successfully."
 
+
+      # ------------------------------------------------------------
+      # 9. SonarQube + Quality Gate
+      # ------------------------------------------------------------
       - name: Run SonarQube Cloud analysis and Quality Gate
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
         with:
           args: >
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=600
 
+
+      # ------------------------------------------------------------
+      # 10. Resumen
+      # ------------------------------------------------------------
       - name: Execution summary
         if: always()
         shell: bash
@@ -69,13 +164,16 @@ jobs:
           {
             echo "# SonarQube POC"
             echo ""
-            echo "| Component | Result |"
+            echo "| Property | Value |"
             echo "|---|---|"
             echo "| Repository | \`${{ github.repository }}\` |"
-            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Event | \`${{ github.event_name }}\` |"
+            echo "| Source branch | \`${SOURCE_BRANCH}\` |"
+            echo "| Target branch | \`${BRANCH_NAME}\` |"
+            echo "| Environment | \`${ENVIRONMENT}\` |"
             echo "| Tests | Executed |"
             echo "| Coverage | Generated |"
             echo "| Build | Executed |"
             echo "| SonarQube | Executed |"
-            echo "| Quality Gate | Evaluated by Sonar Scanner |"
+            echo "| Quality Gate | Evaluated |"
           } >> "$GITHUB_STEP_SUMMARY"
